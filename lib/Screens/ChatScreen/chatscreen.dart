@@ -1,0 +1,853 @@
+// ignore_for_file: avoid_print, unnecessary_brace_in_string_interps, prefer_is_empty
+
+import 'dart:io';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:chat_app/Const/functions.dart';
+import 'package:chat_app/Screens/ImageScreen/imagescreen.dart';
+import 'package:chat_app/Screens/UserDetailScreen/userdetailscreen.dart';
+import 'package:chat_app/Widgets/kvideoplayer.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
+import 'package:bubble/bubble.dart';
+import 'package:grouped_list/grouped_list.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
+import 'package:video_player/video_player.dart';
+
+class ChatScreenArgs {
+  final String currentNumber;
+  final String toNumber;
+  final String toName;
+  final String profileUrl;
+
+  ChatScreenArgs(
+      {required this.currentNumber,
+      required this.profileUrl,
+      required this.toNumber,
+      required this.toName});
+}
+
+class ChatScreen extends StatefulWidget {
+  // ignore: prefer_const_constructors_in_immutables
+
+  const ChatScreen({Key? key}) : super(key: key);
+  static String routeName = '/chatScreen';
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  TextEditingController textEditingController = TextEditingController();
+
+  late List<DocumentSnapshot> listMessage;
+  List<DateTime> listDay = [];
+
+  final ScrollController listScrollController = ScrollController();
+
+  final _dbRef = FirebaseFirestore.instance.collection('Messages');
+  final _userDbRef = FirebaseFirestore.instance.collection("Users");
+
+  File? imageFile;
+  File? videoFile;
+
+  Future _getVideo({required String id, required String pid}) async {
+    ImagePicker _picker = ImagePicker();
+    await _picker
+        .pickVideo(
+            source: ImageSource.gallery,
+            maxDuration: const Duration(seconds: 20))
+        .then((value) async {
+      if (value != null) {
+        videoFile = File(value.path);
+        print(":::Video File Name : ${videoFile!.path}");
+        uploadVideo(id: id, pid: pid);
+      }
+    });
+
+    // await _playVideo(file);
+  }
+
+  Future uploadVideo({required String id, required String pid}) async {
+    String fileName = const Uuid().v1();
+    String fileExtansion = videoFile!.uri
+        .toString()
+        .substring(videoFile!.uri.toString().lastIndexOf("."))
+        .toString();
+    print("FILE EXTENSION : " + fileExtansion);
+    var ref = FirebaseStorage.instance
+        .ref()
+        .child("videos")
+        .child(fileName + fileExtansion);
+    var uploadT = await ref.putFile(
+        videoFile!, SettableMetadata(contentType: 'video/mp4'));
+    String url = await uploadT.ref.getDownloadURL();
+    debugPrint(url);
+    await _onSendMessage(content: url, id: id, pid: pid, contentType: "video");
+  }
+
+  Future _getImage({required String id, required String pid}) async {
+    ImagePicker _picker = ImagePicker();
+    await _picker.pickImage(source: ImageSource.gallery).then((value) {
+      if (value != null) {
+        imageFile = File(value.path);
+        uploadImage(id: id, pid: pid);
+      }
+    });
+  }
+
+  Future uploadImage({required String id, required String pid}) async {
+    String fileName = const Uuid().v1();
+    var ref =
+        FirebaseStorage.instance.ref().child("images").child("$fileName.jpg");
+    var uploadT = await ref.putFile(imageFile!);
+    String url = await uploadT.ref.getDownloadURL();
+    debugPrint(url);
+    await _onSendMessage(content: url, id: id, pid: pid, contentType: "img");
+  }
+
+  _updateMessageRead(DocumentSnapshot doc, String docId) {
+    final DocumentReference documentReference = _dbRef.doc(docId);
+
+    documentReference
+        .set(<String, dynamic>{'read': true}, SetOptions(merge: true));
+  }
+
+  Future _onSendMessage({
+    required String content,
+    String contentType = 'text',
+    required String id,
+    required String pid,
+  }) async {
+    if (content.trim() != '') {
+      textEditingController.clear();
+      content = content.trim();
+      await _dbRef.add({
+        "content": content,
+        "contenttype": contentType,
+        'idFrom': id,
+        'idTo': pid,
+        'read': false,
+        'timestamp': DateTime.now().millisecondsSinceEpoch.toString(),
+        "users": ["${id}_${pid}", "${pid}_${id}"]
+      });
+      // Database.sendMessage(convoID, uid, contact.id, content,
+      //     DateTime.now().millisecondsSinceEpoch.toString());
+      listScrollController.animateTo(0.0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
+  String _getStatusDetails(String response) {
+    if (response.isNotEmpty) {
+      var status = response;
+      if (status == 'online') {
+        print("online");
+        return "online";
+      } else {
+        print("offline: " + response);
+
+        return response;
+      }
+    } else {
+      print("nulllllllllllllllllllll");
+      return " ";
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ChatScreenArgs _args =
+        ModalRoute.of(context)!.settings.arguments as ChatScreenArgs;
+
+    print(_args.toNumber);
+    return Scaffold(
+        appBar: AppBar(
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(
+              bottom: Radius.circular(30),
+            ),
+          ),
+          titleSpacing: 0,
+          centerTitle: false,
+          title: InkWell(
+            onTap: () {
+              Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => UserDetailScreen(
+                      id: _args.toNumber,
+                    ),
+                  ));
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Hero(
+                  tag: "${_args.profileUrl + _args.toName}",
+                  child: CircleAvatar(
+                    backgroundImage:
+                        CachedNetworkImageProvider(_args.profileUrl),
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _args.toName,
+                    ),
+                    const SizedBox(width: 5),
+                    StreamBuilder<QuerySnapshot>(
+                        stream: _userDbRef
+                            .where('phonenumber', isEqualTo: _args.toNumber)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            var response = snapshot.data!.docs.first;
+                            print("RES:::: ${response['status']}");
+                            String res = _getStatusDetails(response["status"]);
+                            if (res.length != 0) {
+                              if (res == "online") {
+                                return const Text(
+                                  "Online",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                  ),
+                                );
+                              } else {
+                                return Text(
+                                  "Last Seen at ${DateTime.fromMillisecondsSinceEpoch(int.parse(response["lastseen"])).hour.toString()}:${DateTime.fromMillisecondsSinceEpoch(int.parse(response["lastseen"])).minute.toString()}",
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                  ),
+                                );
+                              }
+                            } else {
+                              return const Text(
+                                "Offline",
+                                style: TextStyle(
+                                  fontSize: 12,
+                                ),
+                              );
+                            }
+                          } else {
+                            return const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
+                            );
+                          }
+                        })
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        body: Stack(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(bottom: 80),
+              child: StreamBuilder<QuerySnapshot>(
+                stream: _dbRef.where(
+                  "users",
+                  arrayContainsAny: [
+                    "${_args.currentNumber}_${_args.toNumber}"
+                  ],
+                ).snapshots(),
+                builder: (BuildContext context,
+                    AsyncSnapshot<QuerySnapshot> snapshot) {
+                  print(snapshot.data?.docs.length);
+                  if (snapshot.hasData) {
+                    listMessage = snapshot.data!.docs;
+                    print("DATA LENGTH:: ${listMessage.length}");
+                    if (listMessage.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          "Start Conversations",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      );
+                    }
+                    listMessage.sort((b, a) =>
+                        DateTime.fromMillisecondsSinceEpoch(
+                                int.parse(a['timestamp']))
+                            .toString()
+                            .compareTo(DateTime.fromMillisecondsSinceEpoch(
+                                    int.parse(b['timestamp']))
+                                .toString()));
+                    for (var e in listMessage) {
+                      // print(DateTime.tryParse(e['timestamp']));
+                      DateTime day = Timestamp.fromMillisecondsSinceEpoch(
+                              int.parse(e['timestamp']))
+                          .toDate();
+                      if (!listDay.contains(day)) {
+                        listDay.add(Timestamp.fromMillisecondsSinceEpoch(
+                                int.parse(e['timestamp']))
+                            .toDate());
+                      }
+                    }
+                    return GroupedListView<DocumentSnapshot, String>(
+                      controller: listScrollController,
+                      elements: listMessage,
+                      reverse: true,
+                      floatingHeader: true,
+                      sort: false,
+                      // order: GroupedListOrder.DESC,
+                      useStickyGroupSeparators: true,
+
+                      groupBy: (element) {
+                        var msgDate = Timestamp.fromMillisecondsSinceEpoch(
+                                int.parse(element['timestamp']))
+                            .toDate();
+                        return DateFormat('EEE, d/M/y').format(msgDate);
+                      },
+                      groupHeaderBuilder: (e) => SizedBox(
+                        height: 35,
+                        child: Align(
+                          child: Container(
+                            // ignore: prefer_const_constructors
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade400,
+                              borderRadius:
+                                  const BorderRadius.all(Radius.circular(10.0)),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Text(
+                                getDayFromDate(
+                                    curruntTime: DateTime.now(),
+                                    msgTime:
+                                        Timestamp.fromMillisecondsSinceEpoch(
+                                                int.parse(e['timestamp']))
+                                            .toDate()),
+                                style: const TextStyle(fontSize: 12),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      itemBuilder: (context, document) {
+                        print(document.id);
+                        var msgDate = Timestamp.fromMillisecondsSinceEpoch(
+                                int.parse(document['timestamp']))
+                            .toDate();
+                        var msgTime = DateFormat('hh:mm a').format(msgDate);
+                        if (!document['read'] &&
+                            document['idTo'] == _args.currentNumber) {
+                          _updateMessageRead(document, document.id);
+                        }
+                        if (document['idFrom'] == _args.currentNumber) {
+                          // debugPrint(":hi : ${msgTime}");
+                          return Row(
+                            key: Key(DateTime.now()
+                                .millisecondsSinceEpoch
+                                .toString()),
+                            children: [
+                              Container(
+                                  margin:
+                                      const EdgeInsets.symmetric(vertical: 5),
+                                  child: Bubble(
+                                    color: Colors.indigo.shade600,
+                                    style: const BubbleStyle(
+                                        padding: BubbleEdges.all(0)),
+                                    elevation: 5,
+                                    padding: const BubbleEdges.all(8.0),
+                                    nip: BubbleNip.rightTop,
+                                    child: document['contenttype'] == "text"
+                                        ? Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Container(
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                          minWidth: 50,
+                                                          maxWidth: 100),
+                                                  child: Text(
+                                                    document['content'],
+                                                    maxLines: 5,
+                                                    style: const TextStyle(
+                                                      overflow:
+                                                          TextOverflow.visible,
+                                                      color: Colors.white,
+                                                    ),
+                                                  )),
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    msgTime,
+                                                    // ignore: prefer_const_constructors
+                                                    style: TextStyle(
+                                                        color: Colors.white60,
+                                                        fontSize: 10),
+                                                  ),
+                                                  Icon(
+                                                    Icons.check,
+                                                    size: 12,
+                                                    color: document['read']
+                                                        ? Colors.green
+                                                        : Colors.white60,
+                                                  ),
+                                                ],
+                                              )
+                                            ],
+                                          )
+                                        : document['contenttype'] == "video"
+                                            ? Stack(
+                                                children: [
+                                                  KVideoPlayer(
+                                                      videoPlayerController:
+                                                          VideoPlayerController
+                                                              .network(document[
+                                                                  'content'])),
+                                                  Positioned(
+                                                      bottom: 0,
+                                                      right: 0,
+                                                      child: Row(
+                                                        children: [
+                                                          Text(
+                                                            msgTime,
+                                                            // ignore: prefer_const_constructors
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white60,
+                                                                fontSize: 10),
+                                                          ),
+                                                          Icon(
+                                                            Icons.check,
+                                                            size: 12,
+                                                            color: document[
+                                                                    'read']
+                                                                ? Colors.green
+                                                                : Colors
+                                                                    .white60,
+                                                          ),
+                                                        ],
+                                                      )),
+                                                ],
+                                              )
+                                            : InkWell(
+                                                onTap: () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) =>
+                                                          ImageScreen(
+                                                              url: document[
+                                                                  'content']),
+                                                    ),
+                                                  );
+                                                },
+                                                child: Stack(
+                                                  children: [
+                                                    CachedNetworkImage(
+                                                      imageUrl:
+                                                          document['content'],
+                                                      fit: BoxFit.cover,
+                                                      progressIndicatorBuilder:
+                                                          (context, url,
+                                                                  downloadProgress) =>
+                                                              Center(
+                                                        child: SizedBox(
+                                                          height: 60,
+                                                          width: 60,
+                                                          child: CircularProgressIndicator(
+                                                              color:
+                                                                  Colors.white,
+                                                              value:
+                                                                  downloadProgress
+                                                                      .progress),
+                                                        ),
+                                                      ),
+                                                      errorWidget: (context,
+                                                          url, error) {
+                                                        debugPrint(error);
+                                                        return const Icon(Icons
+                                                            .image_search_rounded);
+                                                      },
+                                                    ),
+                                                    Positioned(
+                                                        bottom: 0,
+                                                        right: 0,
+                                                        child: Row(
+                                                          children: [
+                                                            Text(
+                                                              msgTime,
+                                                              // ignore: prefer_const_constructors
+                                                              style: TextStyle(
+                                                                  color: Colors
+                                                                      .white60,
+                                                                  fontSize: 10),
+                                                            ),
+                                                            Icon(
+                                                              Icons.check,
+                                                              size: 12,
+                                                              color: document[
+                                                                      'read']
+                                                                  ? Colors.green
+                                                                  : Colors
+                                                                      .white60,
+                                                            ),
+                                                          ],
+                                                        )),
+                                                  ],
+                                                ),
+                                              ),
+                                  ),
+                                  width: 200)
+                            ],
+                            mainAxisAlignment: MainAxisAlignment.end,
+                          );
+                        } else {
+                          return Container(
+                            margin: const EdgeInsets.symmetric(vertical: 5),
+                            child: Row(children: <Widget>[
+                              Container(
+                                child: Bubble(
+                                  color: Colors.indigo.shade300,
+                                  elevation: 5,
+                                  padding: const BubbleEdges.all(10.0),
+                                  nip: BubbleNip.leftTop,
+                                  child: document['contenttype'] == "text"
+                                      ? Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            SingleChildScrollView(
+                                              child: Container(
+                                                constraints:
+                                                    const BoxConstraints(
+                                                        minWidth: 50,
+                                                        maxWidth: 100),
+                                                child: Text(
+                                                  document['content'],
+                                                  maxLines: 5,
+                                                  style: const TextStyle(
+                                                      overflow:
+                                                          TextOverflow.visible,
+                                                      color: Colors.white),
+                                                ),
+                                              ),
+                                            ),
+                                            Text(
+                                              msgTime,
+                                              // ignore: prefer_const_constructors
+                                              style: TextStyle(
+                                                  color: Colors.white60,
+                                                  fontSize: 10),
+                                            )
+                                          ],
+                                        )
+                                      : document['contenttype'] == "video"
+                                          ? Stack(
+                                              children: [
+                                                KVideoPlayer(
+                                                    videoPlayerController:
+                                                        VideoPlayerController
+                                                            .network(document[
+                                                                'content'])),
+                                                Positioned(
+                                                    bottom: 0,
+                                                    right: 0,
+                                                    child: Row(
+                                                      children: [
+                                                        Text(
+                                                          msgTime,
+                                                          // ignore: prefer_const_constructors
+                                                          style: TextStyle(
+                                                              color: Colors
+                                                                  .white60,
+                                                              fontSize: 10),
+                                                        ),
+                                                        Icon(
+                                                          Icons.check,
+                                                          size: 12,
+                                                          color:
+                                                              document['read']
+                                                                  ? Colors.green
+                                                                  : Colors
+                                                                      .white60,
+                                                        ),
+                                                      ],
+                                                    )),
+                                              ],
+                                            )
+                                          : InkWell(
+                                              onTap: () {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (context) =>
+                                                        ImageScreen(
+                                                            url: document[
+                                                                'content']),
+                                                  ),
+                                                );
+                                              },
+                                              child: Stack(
+                                                children: [
+                                                  CachedNetworkImage(
+                                                    imageUrl:
+                                                        document['content'],
+                                                    fit: BoxFit.cover,
+                                                    progressIndicatorBuilder:
+                                                        (context, url,
+                                                                downloadProgress) =>
+                                                            Center(
+                                                      child: SizedBox(
+                                                        height: 60,
+                                                        width: 60,
+                                                        child: CircularProgressIndicator(
+                                                            color: Colors.white,
+                                                            value:
+                                                                downloadProgress
+                                                                    .progress),
+                                                      ),
+                                                    ),
+                                                    errorWidget:
+                                                        (context, url, error) {
+                                                      debugPrint(error);
+                                                      return const Icon(Icons
+                                                          .image_search_rounded);
+                                                    },
+                                                  ),
+                                                  Positioned(
+                                                    bottom: 0,
+                                                    right: 0,
+                                                    child: Text(
+                                                      msgTime,
+                                                      // ignore: prefer_const_constructors
+                                                      style: TextStyle(
+                                                          color: Colors.white60,
+                                                          fontSize: 10),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                ),
+                                width: 200.0,
+                                margin: const EdgeInsets.only(left: 10.0),
+                              )
+                            ]),
+                          );
+                        }
+                      },
+                    );
+                    // return ListView.builder(
+                    //   itemBuilder: (context, index) {
+                    //     var document = listMessage[index];
+                    //     var msgDate = Timestamp.fromMillisecondsSinceEpoch(
+                    //             int.parse(document['timestamp']))
+                    //         .toDate();
+                    //     var msgTime = DateFormat('hh:mm a').format(msgDate);
+                    //     print(listDay);
+                    //     if (document['idFrom'] == _args.currentNumber) {
+                    //       // debugPrint(":hi : ${msgTime}");
+                    //       return Row(
+                    //         key: Key(DateTime.now()
+                    //             .millisecondsSinceEpoch
+                    //             .toString()),
+                    //         children: [
+                    //           Container(
+                    //               margin: EdgeInsets.symmetric(vertical: 5),
+                    //               child: Bubble(
+                    //                 color: Colors.indigo.shade600,
+                    //                 elevation: 5,
+                    //                 padding: const BubbleEdges.all(10.0),
+                    //                 nip: BubbleNip.rightTop,
+                    //                 child: Row(
+                    //                   mainAxisAlignment:
+                    //                       MainAxisAlignment.spaceBetween,
+                    //                   crossAxisAlignment:
+                    //                       CrossAxisAlignment.end,
+                    //                   children: [
+                    //                     Text(
+                    //                       document['content'],
+                    //                       style: TextStyle(color: Colors.white),
+                    //                     ),
+                    //                     Text(
+                    //                       msgTime,
+                    //                       style: TextStyle(
+                    //                           color: Colors.white60,
+                    //                           fontSize: 10),
+                    //                     )
+                    //                   ],
+                    //                 ),
+                    //               ),
+                    //               width: 200)
+                    //         ],
+                    //         mainAxisAlignment: MainAxisAlignment.end,
+                    //       );
+                    //     } else {
+                    //       return Container(
+                    //         margin: EdgeInsets.symmetric(vertical: 5),
+                    //         child: Column(
+                    //           children: <Widget>[
+                    //             Row(children: <Widget>[
+                    //               Container(
+                    //                 child: Bubble(
+                    //                   color: Colors.indigo.shade300,
+                    //                   elevation: 5,
+                    //                   padding: const BubbleEdges.all(10.0),
+                    //                   nip: BubbleNip.leftTop,
+                    //                   child: Row(
+                    //                     mainAxisAlignment:
+                    //                         MainAxisAlignment.spaceBetween,
+                    //                     crossAxisAlignment:
+                    //                         CrossAxisAlignment.end,
+                    //                     children: [
+                    //                       Text(
+                    //                         document['content'],
+                    //                         style:
+                    //                             TextStyle(color: Colors.white),
+                    //                       ),
+                    //                       Text(
+                    //                         msgTime,
+                    //                         style: TextStyle(
+                    //                             color: Colors.white60,
+                    //                             fontSize: 10),
+                    //                       )
+                    //                     ],
+                    //                   ),
+                    //                 ),
+                    //                 width: 200.0,
+                    //                 margin: const EdgeInsets.only(left: 10.0),
+                    //               )
+                    //             ])
+                    //           ],
+                    //           crossAxisAlignment: CrossAxisAlignment.start,
+                    //         ),
+                    //       );
+                    //     }
+                    //   },
+                    //   itemCount: snapshot.data!.docs.length,
+                    //   padding: const EdgeInsets.all(10.0),
+                    //   reverse: true,
+                    //   controller: listScrollController,
+                    // );
+
+                  } else {
+                    return Container();
+                  }
+                },
+              ),
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 5, right: 5, bottom: 5),
+                child: Row(
+                  children: [
+                    Flexible(
+                        child: Container(
+                      padding: const EdgeInsets.only(right: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.shade300,
+                        borderRadius: BorderRadius.circular(40),
+                      ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: TextField(
+                              autofocus: true,
+                              maxLines: 3,
+                              minLines: 1,
+                              style: const TextStyle(color: Colors.white70),
+                              controller: textEditingController,
+                              decoration: InputDecoration(
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(40),
+                                  borderSide: const BorderSide(
+                                    width: 0,
+                                    style: BorderStyle.none,
+                                  ),
+                                ),
+                                hintStyle:
+                                    const TextStyle(color: Colors.white70),
+                                hintText: 'Message...',
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                              onTap: () {
+                                debugPrint("Add Image");
+                                _getImage(
+                                    id: _args.currentNumber,
+                                    pid: _args.toNumber);
+                              },
+                              child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  child: const Icon(
+                                    Icons.add_a_photo,
+                                    color: Colors.white70,
+                                    size: 22,
+                                  ))),
+                          InkWell(
+                              onTap: () {
+                                debugPrint("Add Video");
+                                _getVideo(
+                                    id: _args.currentNumber,
+                                    pid: _args.toNumber);
+                              },
+                              child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  child: const Icon(
+                                    Icons.video_call,
+                                    color: Colors.white70,
+                                    size: 28,
+                                  ))),
+                        ],
+                      ),
+                    )),
+                    const SizedBox(
+                      width: 5,
+                    ),
+                    InkWell(
+                      onTap: () {
+                        _onSendMessage(
+                            content: textEditingController.text,
+                            id: _args.currentNumber,
+                            pid: _args.toNumber);
+                      },
+                      child: Container(
+                        height: 50,
+                        width: 50,
+                        decoration: BoxDecoration(
+                            color: Colors.indigo.shade300,
+                            borderRadius: BorderRadius.circular(40)),
+                        child: Center(
+                          child: Container(
+                            margin: const EdgeInsets.only(left: 5),
+                            child: const Icon(
+                              Icons.send,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ));
+  }
+}
